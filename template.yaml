@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sns alert via cloudwatch log
+
+Globals:
+  Function:
+    Timeout: 5
+
+Resources:
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: dependencies_layer
+      CompatibleRuntimes:
+        - python3.11
+    Metadata:
+      BuildMethod: python3.11
+
+  MainFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: main.lambda_handler
+      Runtime: python3.11
+      Layers: 
+        - !Ref DependenciesLayer
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+  AlertFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MainFunction
+    Properties:
+      CodeUri: src/
+      Handler: alert.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt AlertFunctionRole.Arn
+      Layers: 
+        - !Ref DependenciesLayer
+      Events:
+        AlertEvent:
+          Type: CloudWatchLogs
+          Properties:
+            FilterPattern: '?ERROR ?WARN ?INFO ?5xx' #filter pattern to alert
+            LogGroupName: !Join [ "/", [ '/aws/lambda', !Ref MainFunction] ] #this will failed firsttime so have to trigger lambda to log first
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Environment:
+        Variables:
+          SNS_ARN: !Ref AlertSNSTopic
+
+  AlertSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: "AlertSNSTopic"
+      Subscription:
+        - Protocol: Email
+          Endpoint: 'nadtakan.futhoem@gmail.com'
+
+  AlertFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+      Policies:
+        - PolicyName: AlertSNSTopicPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertSNSTopic
